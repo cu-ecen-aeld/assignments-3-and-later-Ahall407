@@ -48,6 +48,8 @@ then
 		exit 1
 	fi
 fi
+
+## Removing make file for assignment3-part-1 ###
 #echo "Removing the old writer utility and compiling as a native application"
 #make clean
 #make

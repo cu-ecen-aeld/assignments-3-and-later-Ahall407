@@ -1,4 +1,11 @@
 #include "systemcalls.h"
+#include <stdlib.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 /**
  * @param cmd the command to execute with system()
@@ -16,8 +23,13 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
-
-    return true;
+    int success = system(cmd);
+    if (success == -1) {
+        return false;
+    }
+    else {
+        return true;
+    }
 }
 
 /**
@@ -47,7 +59,8 @@ bool do_exec(int count, ...)
     command[count] = NULL;
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
-    command[count] = command[count];
+    // command[count] = command[count];
+    va_end(args);
 
 /*
  * TODO:
@@ -58,8 +71,28 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
+    pid_t pid = fork ();
+    if (pid < 0) {
+        perror("fork()");
+        return false;
+    } else if (pid == 0) {
+        execv (command[0], command);
+        //below won't run if execv passes
+        perror("execv()");
+        exit(EXIT_FAILURE);
+    }
 
-    va_end(args);
+    // Wait for child process to end
+    int status;
+    if (wait(&status) < 0) {
+        perror("wait()");
+        return false;
+    }
+
+    // Check if child failed
+    if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        return false;
+    }
 
     return true;
 }
@@ -82,8 +115,8 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     command[count] = NULL;
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
-    command[count] = command[count];
-
+    // command[count] = command[count];
+    va_end(args);
 
 /*
  * TODO
@@ -93,7 +126,42 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *
 */
 
-    va_end(args);
+    int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+    if (fd < 0) {
+	    perror("open()");
+	    abort();
+    }
 
+    pid_t pid = fork ();
+    if (pid < 0) {
+        perror("fork()");
+        return false;
+    } else if (pid == 0) {
+        if (dup2(fd, 1) < 0) { 
+            perror("dup2"); 
+            abort(); 
+        }
+        close(fd);
+        execv (command[0], command);
+        // Below won't run if execv() passes
+        perror("execv()");
+        exit(EXIT_FAILURE);
+    }
+
+    // Wait for the child process to end
+    int status;
+    if (wait(&status) < 0) {
+        perror("wait()");
+        close(fd);
+        return false;
+    }
+
+    // Check if child failed
+    if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        close(fd);
+        return false;
+    }
+    
+    close(fd);
     return true;
 }
