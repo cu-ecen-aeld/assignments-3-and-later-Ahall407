@@ -69,9 +69,10 @@ then
 fi
 
 # DONE: Create necessary base directories
-mkdir -p {$OUTDIR}/rootfs/{bin,dev,etc,home,lib,lib64,proc,sbin,sys,tmp,usr,var}
-mkdir -p {$OUTDIR}/rootfs/{usr/lib,usr/bin,usr/sbin}
-mkdir -p {$OUTDIR}/rootfs/{var/log}
+mkdir -p ${OUTDIR}/rootfs
+mkdir -p ${OUTDIR}/rootfs/{bin,dev,etc,home,lib,lib64,proc,sbin,sys,tmp,usr,var}
+mkdir -p ${OUTDIR}/rootfs/{usr/lib,usr/bin,usr/sbin}
+mkdir -p ${OUTDIR}/rootfs/{var/log}
 
 cd "$OUTDIR"
 if [ ! -d "${OUTDIR}/busybox" ]
@@ -105,12 +106,7 @@ cp -a ${SYSROOT}/lib64/libc.so.6 ${OUTDIR}/rootfs/lib64
 ROOTFS=${OUTDIR}/rootfs
 cd ${ROOTFS}
 
-sudo -s << _EOF
-mknod ${ROOTFS}/dev/null c 1 3
-chmod 666 ${ROOTFS}/dev/null
-_EOF
-
-# sudo mknod -m 666 ${ROOTFS}/dev/null c 1 3
+sudo mknod -m 666 ${ROOTFS}/dev/null c 1 3
 sudo mknod -m 600 ${ROOTFS}/dev/console c 5 1
 
 # DONE: Clean and build the writer utility
