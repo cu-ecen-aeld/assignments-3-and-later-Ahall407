@@ -1,11 +1,19 @@
-ifdef CROSS-COMPILE
-	CC:=aarch64-none-linux-gnu-gcc
+# ifdef CROSS-COMPILE
+# 	CC = $(CROSS_COMPILE)gcc
+# else
+# 	CC:=gcc
+# endif
+
+ifeq ($(CROSS_COMPILE),)
+	# Native build
+	CC = gcc
 else
-	CC:=gcc
+	# Cross-compilation
+	CC = $(CROSS_COMPILE)gcc
 endif
 
-writer:
-	${CC} -o writer writer.c
+writer: writer.c
+	$(CC) -o writer writer.c
 
 .PHONY: clean
 clean:
