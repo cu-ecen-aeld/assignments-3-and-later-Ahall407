@@ -72,7 +72,7 @@ fi
 mkdir -p ${OUTDIR}/rootfs
 mkdir -p ${OUTDIR}/rootfs/{bin,dev,etc,home,lib,lib64,proc,sbin,sys,tmp,usr,var}
 mkdir -p ${OUTDIR}/rootfs/{usr/lib,usr/bin,usr/sbin}
-mkdir -p ${OUTDIR}/rootfs/{var/log}
+mkdir -p ${OUTDIR}/rootfs/var/log
 
 cd "$OUTDIR"
 if [ ! -d "${OUTDIR}/busybox" ]
