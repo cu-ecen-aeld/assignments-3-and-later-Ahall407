@@ -8,6 +8,8 @@ set -u
 NUMFILES=10
 WRITESTR=AELD_IS_FUN
 WRITEDIR=/tmp/aeld-data
+OUTPUTDIR=/tmp/assignment4-result.txt
+CONFDIR=/etc/finder-app/conf
 username=$(cat conf/username.txt)
 
 if [ $# -lt 3 ]
@@ -33,7 +35,8 @@ rm -rf "${WRITEDIR}"
 
 # create $WRITEDIR if not assignment1
 # assignment=`cat ../conf/assignment.txt` Commenting out for assignment 3 part 2
-assignment=`cat conf/assignment.txt`
+# assignment=`cat conf/assignment.txt`
+assignment=$(cat $CONFDIR/assignment.txt) ## comment for assignment 4 part 2
 
 if [ $assignment != 'assignment1' ]
 then
@@ -57,18 +60,27 @@ fi
 
 for i in $( seq 1 $NUMFILES)
 do
-	./writer.sh "$WRITEDIR/${username}$i.txt" "$WRITESTR"
+	# ./writer.sh "$WRITEDIR/${username}$i.txt" "$WRITESTR"
+	writer "$WRITEDIR/${username}$i.txt" "$WRITESTR"
 done
 
 OUTPUTSTRING=$(./finder.sh "$WRITEDIR" "$WRITESTR")
 
 # remove temporary directories
-rm -rf /tmp/aeld-data
+rm -rf "$WRITEDIR"
 
 set +e
 echo ${OUTPUTSTRING} | grep "${MATCHSTR}"
 if [ $? -eq 0 ]; then
 	echo "success"
+	# Write the output of finder command to /tmp/assignment4-result.txt
+    echo ${OUTPUTSTRING} > $OUTPUTDIR
+	if [ $? -eq 1 ]; then
+        echo "ERROR: writing output to $OUTPUTDIR"
+        exit 1
+    else
+        echo "Written output to $OUTPUTDIR successfully"
+	fi
 	exit 0
 else
 	echo "failed: expected  ${MATCHSTR} in ${OUTPUTSTRING} but instead found"
