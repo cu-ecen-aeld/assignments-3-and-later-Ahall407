@@ -10,7 +10,7 @@ WRITESTR=AELD_IS_FUN
 WRITEDIR=/tmp/aeld-data
 OUTPUTDIR=/tmp/assignment4-result.txt
 CONFDIR=/etc/finder-app/conf
-username=$(cat conf/username.txt)
+username=$(cat $(CONFDIR)/username.txt)
 
 if [ $# -lt 3 ]
 then
