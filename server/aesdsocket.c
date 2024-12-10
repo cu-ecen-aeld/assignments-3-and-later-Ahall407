@@ -50,7 +50,7 @@ int main(int argc, char *argv[]) {
     // Initialize server address structure
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = IN_ADDR_ANY;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(PORT); // Replace with your desired port
 
     // Bind socket to address
@@ -85,7 +85,7 @@ int main(int argc, char *argv[]) {
             syslog(LOG_ERR, "Error handling request from %s", client_ip);
         } else if (result == 0) {
             // Indicate that the client has disconnected properly
-            syslog(LOG_INFO, "Client %s disconnected", client_ip);
+            syslog(LOG_INFO, "Closed connection from %s", client_ip);
         }
 
         close(clientfd);
@@ -120,7 +120,7 @@ void signal_handler(int sign) {
 // Rec and Send file data from server and client
 int write_to_file(int clientfd) {
     int valread;
-    char buffer[1024] = {0};
+    char buffer[1024];
 
     // Open File to write or append to
     FILE *fp = fopen(FILE_IO, "a+");
@@ -130,7 +130,7 @@ int write_to_file(int clientfd) {
     }
 
     // Write string to file until eol is reached
-    while ((valread = read(clientfd, buffer, 1024)) > 0) {
+    while ((valread = recv(clientfd, buffer, sizeof(buffer) -1, 0)) > 0) {
         buffer[valread] = '\0';
         fputs(buffer, fp);
         fflush(fp); 
