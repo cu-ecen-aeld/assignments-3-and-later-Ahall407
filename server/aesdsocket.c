@@ -33,18 +33,38 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
+    // check for daemon mode
+    if ((argc == 2) && (strcmp(argv[1], "-d") == 0)) {
+        pid_t pid = fork();
+        if ( pid < 0 ) {
+            syslog(LOG_ERR, "Fork Failed.");
+            cleanup();
+            exit(EXIT_FAILURE);
+        }
+        if ( pid > 0 ) {
+            syslog(LOG_INFO, "Successfully created daemon.");
+            exit(EXIT_SUCCESS);
+        }
+
+        //stop output to the terminal
+        close(STDIN_FILENO);
+        close(STDOUT_FILENO);
+        close(STDERR_FILENO);
+    }
+
+    // Create Server Socket
     serverfd = socket(AF_INET, SOCK_STREAM, 0);
     if (serverfd < 0) { //socket error handling
         syslog(LOG_ERR, "Error creating socket");
         cleanup();
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     // Set SO_REUSEADDR option
     if (setsockopt(serverfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
         syslog(LOG_ERR, "ERROR setting SO_REUSEADDR");
         cleanup();
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     // Initialize server address structure
@@ -56,7 +76,7 @@ int main(int argc, char *argv[]) {
     // Bind socket to address
     if (bind(serverfd, (struct sockaddr *) &server_addr, sizeof(server_addr)) < 0) {
         syslog(LOG_ERR, "ERROR on binding");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     // Listen for connections
@@ -64,7 +84,7 @@ int main(int argc, char *argv[]) {
         syslog(LOG_ERR, "Error listening on socket.");
         close(serverfd);
         cleanup();
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     while( run > 0 ) {
@@ -72,7 +92,7 @@ int main(int argc, char *argv[]) {
         // Accepting client connections
         if ((clientfd = accept(serverfd, (struct sockaddr *)&client_addr, (socklen_t*)&client_len)) < 0) {
             syslog(LOG_ERR, "Failed to accept connection.");
-            exit(1);
+            exit(EXIT_FAILURE);
         }
 
         // Log accepted connection
@@ -100,8 +120,8 @@ int main(int argc, char *argv[]) {
 
 //cleanup steps
 void cleanup() {
-    if (serverfd != -1) close(serverfd);
-    if (clientfd != -1) close(clientfd);
+    if (serverfd >= 0) close(serverfd);
+    if (clientfd >= 0) close(clientfd);
     if (remove(FILE_IO) != 0) syslog(LOG_ERR, "Failed to remove file: %s", strerror(errno));
     syslog(LOG_INFO, "Cleanup was reached!");
     closelog();
@@ -126,7 +146,7 @@ int write_to_file(int clientfd) {
     FILE *fp = fopen(FILE_IO, "a+");
     if (fp == NULL) {
         syslog(LOG_ERR, "Server failed to open file.");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     // Write string to file until eol is reached
