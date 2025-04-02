@@ -94,7 +94,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    printf("Running aesd socket on port %d", PORT);
+    printf("Running aesd socket on port %d \n", PORT);
 
     // Start the timestamp thread
     if (pthread_create(&timestamp_thread, NULL, append_timestamp, NULL) != 0) {
@@ -130,7 +130,7 @@ int main(int argc, char *argv[]) {
     close(server_socket);
     pthread_mutex_destroy(&file_mutex);
     closelog();  // Close syslog
-    printf("Closed aesd socket on port %d", PORT);
+    printf("Closed aesd socket on port %d \n", PORT);
     return 0;
 }
 
@@ -140,7 +140,7 @@ void signal_handler(int sig) {
     if (sig == SIGINT || sig == SIGTERM) {
         syslog(LOG_INFO, "Server interrupted by signal %d. Closing server...", sig);
         close(server_socket);
-        printf("Closed aesd socket on port %d", PORT);
+        printf("Closed aesd socket on port %d \n", PORT);
         
         // Join all active threads in the linked list
         thread_node_t* current = thread_list;
@@ -266,9 +266,10 @@ void* handle_client_IO(void* arg) {
             buffer_size *= 2;
             buffer = (char *)realloc(buffer, buffer_size * sizeof(char));
         }
-        printf("Just recieved a new byte = %s", buffer);
+        printf("Just recieved a new byte = %s \n", buffer);
         // If newline is found, stop receiving
         if (strchr(buffer, '\n')) {
+            printf("Found a newline character and breaking while loop.");
             break;
         }
     }
