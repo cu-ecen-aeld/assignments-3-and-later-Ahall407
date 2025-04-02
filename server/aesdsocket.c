@@ -285,6 +285,7 @@ void* handle_client_IO(void* arg) {
     // Write received message to the file
     int write_file = open(DATA_FILE, O_CREAT | O_RDWR | O_APPEND);
     if (write_file < 0) {
+        printf("Failed to open file for writing data.");
         syslog(LOG_ERR, "Error: Failed to open file for writing client data.");
         pthread_mutex_unlock(&file_mutex);
         close(client_socket);
