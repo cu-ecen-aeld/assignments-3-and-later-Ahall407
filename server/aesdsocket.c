@@ -94,6 +94,8 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
+    printf("Running aesd socket on port %d", PORT);
+
     // Start the timestamp thread
     if (pthread_create(&timestamp_thread, NULL, append_timestamp, NULL) != 0) {
         syslog(LOG_ERR, "Error: Failed to create Timestamp thread.");
@@ -128,6 +130,7 @@ int main(int argc, char *argv[]) {
     close(server_socket);
     pthread_mutex_destroy(&file_mutex);
     closelog();  // Close syslog
+    printf("Closed aesd socket on port %d", PORT);
     return 0;
 }
 
@@ -137,6 +140,7 @@ void signal_handler(int sig) {
     if (sig == SIGINT || sig == SIGTERM) {
         syslog(LOG_INFO, "Server interrupted by signal %d. Closing server...", sig);
         close(server_socket);
+        printf("Closed aesd socket on port %d", PORT);
         
         // Join all active threads in the linked list
         thread_node_t* current = thread_list;
@@ -245,16 +249,24 @@ void* append_timestamp(void* arg) {
 // Function to handle each client in a separate thread
 void* handle_client_IO(void* arg) {
     int client_socket = *((int*)arg);
-    char buffer[BUFFER_SIZE];
+    // char buffer[BUFFER_SIZE];
     int bytes_received;
     int total_received = 0;
 
     free(arg);  // Free the allocated memory for client_socket
 
+    char *buffer = (char *)malloc(BUFFER_SIZE * sizeof(char));
+    size_t buffer_size = BUFFER_SIZE;
+
     while ((bytes_received = read(client_socket, buffer + total_received, sizeof(buffer) - total_received - 1)) > 0) {
         total_received += bytes_received;
-        buffer[total_received] = '\0';
-
+        // buffer[total_received] = '\0'; // dont need
+        // realloc buffer size
+        if (total_received >= buffer_size) {
+            buffer_size *= 2;
+            buffer = (char *)realloc(buffer, buffer_size * sizeof(char));
+        }
+        printf("Just recieved a new byte = %c", bytes_received);
         // If newline is found, stop receiving
         if (strchr(buffer, '\n')) {
             break;
@@ -271,20 +283,22 @@ void* handle_client_IO(void* arg) {
     pthread_mutex_lock(&file_mutex);
 
     // Write received message to the file
-    FILE *file = fopen(DATA_FILE, "w");
-    if (file == NULL) {
+    int write_file = open(DATA_FILE, O_CREAT | O_RDWR | O_APPEND);
+    if (write_file < 0) {
         syslog(LOG_ERR, "Error: Failed to open file for writing client data.");
         pthread_mutex_unlock(&file_mutex);
         close(client_socket);
         return NULL;
     }
 
-    fwrite(buffer, sizeof(char), total_received, file);
-    fclose(file);
+    printf("Writing bytes = %c", total_received);
+    write(write_file, buffer, total_received);
+    close(write_file);
 
     // Send the contents of the file back to the client
-    file = fopen(DATA_FILE, "r");
-    if (file == NULL) {
+    // file = fopen(DATA_FILE, "r");
+    int read_file = open(DATA_FILE, O_RDONLY);
+    if (read_file < 0) {
         syslog(LOG_ERR, "Error: Failed to open file for reading file content.");
         pthread_mutex_unlock(&file_mutex);
         close(client_socket);
@@ -292,17 +306,26 @@ void* handle_client_IO(void* arg) {
     }
 
     // Send the contents of the file to the client
-    while ((bytes_received = fread(buffer, 1, sizeof(buffer), file)) > 0) {
-        if (write(client_socket, buffer, bytes_received) == -1) {
+    while ((bytes_received = read(read_file, buffer, sizeof(buffer))) > 0) {
+        printf("Byte to send back = %c", bytes_received);
+        int send_success = send(client_socket, buffer, bytes_received, 0);
+        if (send_success == -1) {
             syslog(LOG_ERR, "Error: Failed to Write while sending data to client.");
-            fclose(file);
+            close(read_file);
             pthread_mutex_unlock(&file_mutex);
             close(client_socket);
             return NULL;
         }
+        // if (write(client_socket, buffer, bytes_received) == -1) {
+        //     syslog(LOG_ERR, "Error: Failed to Write while sending data to client.");
+        //     fclose(file);
+        //     pthread_mutex_unlock(&file_mutex);
+        //     close(client_socket);
+        //     return NULL;
+        // }
     }
 
-    fclose(file);
+    close(read_file);
     pthread_mutex_unlock(&file_mutex);
     close(client_socket);
     return NULL;
