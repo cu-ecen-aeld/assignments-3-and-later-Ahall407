@@ -266,7 +266,7 @@ void* handle_client_IO(void* arg) {
             buffer_size *= 2;
             buffer = (char *)realloc(buffer, buffer_size * sizeof(char));
         }
-        printf("Just recieved a new byte = %c", bytes_received);
+        printf("Just recieved a new byte = %s", buffer);
         // If newline is found, stop receiving
         if (strchr(buffer, '\n')) {
             break;
