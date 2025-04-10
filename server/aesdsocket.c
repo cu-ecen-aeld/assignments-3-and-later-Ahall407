@@ -8,6 +8,7 @@
 #include <time.h>
 #include <syslog.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 
 #define PORT 9000
 #define BUFFER_SIZE 1024
@@ -31,8 +32,11 @@ thread_node_t* thread_list = NULL;
 
 // Function Declarations
 void signal_handler(int sig);
+void cleanup_all();
 void daemonize();
 void add_thread(pthread_t thread_id);
+void join_threads();
+void remove_thread(pthread_t tid);
 void* append_timestamp(void* arg);
 void* handle_client_IO(void* arg);
 
@@ -54,9 +58,16 @@ int main(int argc, char *argv[]) {
         daemonize();
     }
 
-    // Set up signal handlers for SIGINT and SIGTERM
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
+    // Set up signal handlers using sigaction for better control
+    struct sigaction sa;
+    sa.sa_handler = signal_handler;
+    sa.sa_flags = 0;
+    sigemptyset(&sa.sa_mask);
+
+    if (sigaction(SIGINT, &sa, NULL) == -1 || sigaction(SIGTERM, &sa, NULL) == -1) {
+        syslog(LOG_ERR, "Error setting up signal handlers");
+        exit(EXIT_FAILURE);
+    }
 
     // Open syslog
     openlog("aesd_socket", LOG_PID | LOG_CONS, LOG_DAEMON);
@@ -94,15 +105,17 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    printf("Running aesd socket on port %d \n", PORT);
-
     // Start the timestamp thread
     if (pthread_create(&timestamp_thread, NULL, append_timestamp, NULL) != 0) {
         syslog(LOG_ERR, "Error: Failed to create Timestamp thread.");
         close(server_socket);
         exit(EXIT_FAILURE);
     }
+    else {
+        add_thread(timestamp_thread); // Add the thread to the linked list
+    }
 
+    printf("Running aesd socket on port %d \n", PORT);
     syslog(LOG_INFO, "Server listening on port %d...", PORT);
 
     // Accept incoming connections continuously until interrupted
@@ -121,15 +134,13 @@ int main(int argc, char *argv[]) {
             syslog(LOG_ERR, "Error: Failed to create the client thread.");
             free(client_socket);
         } else {
-            // Add the thread to the linked list
-            add_thread(thread_id);
-        }
+            add_thread(thread_id); // Add the thread to the linked list
+        } 
     }
 
-    // The server will clean up in the signal handler
-    close(server_socket);
-    pthread_mutex_destroy(&file_mutex);
-    closelog();  // Close syslog
+    // The server will clean up after the signal handler sets run = 0
+    join_threads();
+    cleanup_all();
     printf("Closed aesd socket on port %d \n", PORT);
     return 0;
 }
@@ -139,25 +150,28 @@ int main(int argc, char *argv[]) {
 void signal_handler(int sig) {
     if (sig == SIGINT || sig == SIGTERM) {
         syslog(LOG_INFO, "Server interrupted by signal %d. Closing server...", sig);
-        close(server_socket);
-        printf("Closed aesd socket on port %d \n", PORT);
-        
-        // Join all active threads in the linked list
-        thread_node_t* current = thread_list;
-        while (current != NULL) {
-            pthread_join(current->thread_id, NULL);
-            thread_node_t* temp = current;
-            current = current->next;
-            free(temp);
-        }
-
-        // Destroy the mutex and exit
-        pthread_mutex_destroy(&file_mutex);
-        syslog(LOG_INFO, "Server shut down successfully.");
-        closelog();
+        printf("Caught signal and exiting.");
         run = 0;
-        exit(0);
     }
+}
+
+void cleanup_all(){
+    syslog(LOG_INFO, "Cleaning up server socket, closing file and exiting.");
+    // Close server socket
+    if (shutdown(server_socket, SHUT_RDWR) == -1) {
+        syslog(LOG_ERR, "Error shutting down server socket");
+    }
+
+    if (close(server_socket) == -1) {
+        syslog(LOG_ERR, "Error closing server socket");
+    }
+
+    printf("Closed aesd socket on port %d \n", PORT);
+
+    unlink(DATA_FILE);
+    pthread_mutex_destroy(&file_mutex);
+    closelog();
+    exit(EXIT_SUCCESS);
 }
 
 
@@ -210,6 +224,39 @@ void add_thread(pthread_t thread_id) {
     thread_list = new_node;
 }
 
+void join_threads() {
+    // Join all active threads in the linked list
+    thread_node_t* current = thread_list;
+    while (current != NULL) {
+        pthread_join(current->thread_id, NULL);
+        thread_node_t* temp = current;
+        current = current->next;
+        free(temp);
+    }
+    thread_list = NULL; // Reset the head of the list after joining all threads
+}
+
+// Function to remove a thread from the linked list
+void remove_thread(pthread_t tid) {
+    thread_node_t* prev = NULL;
+    thread_node_t* current = thread_list;
+
+    while (current != NULL) {
+        if (pthread_equal(current->thread_id, tid)) {
+            if (prev == NULL) {
+                thread_list = current->next;
+            }
+            else {
+                prev->next = current->next;
+            }
+            free(current);
+            break;
+        }
+        prev = current;
+        current = current->next;
+    }
+}
+
 
 // Function to append a timestamp to the file every 10 seconds
 void* append_timestamp(void* arg) {
@@ -219,30 +266,33 @@ void* append_timestamp(void* arg) {
 
     while (run > 0) {
         // Get the current time
+        sleep(TSTAMP_INTERVAL); 
         time(&raw_time);
         time_info = localtime(&raw_time);
 
         // Generate timestamp in RFC 2822 format
-        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", time_info);
+        strftime(timestamp, sizeof(timestamp), "timestamp:%a, %d %b %Y %T %z\n", time_info);
         
         // Lock the mutex to write timestamp atomically
         pthread_mutex_lock(&file_mutex);
-        
         // Open the file in append mode
-        FILE* file = fopen(DATA_FILE, "a");
-        if (file == NULL) {
-            syslog(LOG_ERR, "Error: Failed to open file while appending timestamp.");
+        int write_file = open(DATA_FILE, O_CREAT | O_RDWR | O_APPEND, S_IRUSR | S_IWUSR);
+        if (write_file < 0) {
+            printf("Failed to open file for writing timestamp.\n");
+            syslog(LOG_ERR, "Error: Failed to open file for writing client data.");
             pthread_mutex_unlock(&file_mutex);
-            continue;
+            cleanup_all();
         }
 
         // Write the timestamp to the file, unlock mutex and sleep
-        fprintf(file, "timestamp:%s\n", timestamp);
-        fclose(file);
+        write(write_file, timestamp, strlen(timestamp));
+        close(write_file);
+        printf("Just wrote timestamp %s to file.\n", timestamp);
         pthread_mutex_unlock(&file_mutex);
-        sleep(TSTAMP_INTERVAL);
+        // sleep(TSTAMP_INTERVAL);  
     }
-    return NULL;
+    remove_thread(pthread_self());
+    pthread_exit(NULL);
 }
 
 
@@ -258,77 +308,87 @@ void* handle_client_IO(void* arg) {
     char *buffer = (char *)malloc(BUFFER_SIZE * sizeof(char));
     size_t buffer_size = BUFFER_SIZE;
 
-    while ((bytes_received = read(client_socket, buffer + total_received, sizeof(buffer) - total_received - 1)) > 0) {
+    // Synchronize access to the file using the mutex
+    pthread_mutex_lock(&file_mutex);
+    while ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
+        if (bytes_received <= 0) {
+            printf("Failed to read data from the client.");
+            syslog(LOG_ERR, "Error: Failed to Read from Client.");
+            pthread_mutex_unlock(&file_mutex);
+            close(client_socket);
+            cleanup_all();
+        }
+        
+        // realloc buffer size if data larger that 1024 bytes
         total_received += bytes_received;
-        // buffer[total_received] = '\0'; // dont need
-        // realloc buffer size
         if (total_received >= buffer_size) {
-            buffer_size *= 2;
+            buffer_size += 512;
             buffer = (char *)realloc(buffer, buffer_size * sizeof(char));
         }
+
         printf("Just recieved a new byte = %s \n", buffer);
-        // If newline is found, stop receiving
-        if (strchr(buffer, '\n')) {
-            printf("Found a newline character and breaking while loop.");
+        // Write received message to the file
+        int write_file = open(DATA_FILE, O_CREAT | O_RDWR | O_APPEND, S_IRUSR | S_IWUSR);
+        if (write_file < 0) {
+            printf("Failed to open file for writing data.\n");
+            syslog(LOG_ERR, "Error: Failed to open file for writing client data.");
+            pthread_mutex_unlock(&file_mutex);
+            free(buffer);
+            close(client_socket);
+            cleanup_all();
+        }
+
+        printf("Writing bytes = %s \n", buffer);
+        write(write_file, buffer, total_received);
+        close(write_file);
+        printf("Just wrote bytes to %s \n", DATA_FILE);
+
+        if (memchr(buffer, '\n', bytes_received) != NULL) {
+
+            // Send the contents of the file back to the client
+            int read_file = open(DATA_FILE, O_RDONLY, S_IRUSR);
+            if (read_file < 0) {
+                printf("Failed to open the file for reading back client data.\n");
+                syslog(LOG_ERR, "Error: Failed to open file for reading file content.");
+                pthread_mutex_unlock(&file_mutex);
+                free(buffer);
+                close(client_socket);
+                cleanup_all();
+            }
+
+            int total_read = 0;
+            char *read_buffer = (char *)malloc(BUFFER_SIZE * sizeof(char));
+            size_t bytes_read = BUFFER_SIZE;
+            printf("Starting to read the file contents back to the client.\n");
+            // Send the contents of the file to the client
+            while ((bytes_read = read(read_file, read_buffer, sizeof(read_buffer))) > 0) {
+                total_read += bytes_read;
+                if (total_read >= bytes_read) {
+                    bytes_read += 512;
+                    read_buffer = (char *)realloc(read_buffer, bytes_read * sizeof(char));
+                }
+
+                printf("Byte to send back = %s \n", read_buffer);
+                int send_success = send(client_socket, read_buffer, bytes_read, 0);
+                if (send_success == -1) {
+                    printf("Failed to send byte back to client.\n");
+                    syslog(LOG_ERR, "Error: Failed to Write while sending data to client.");
+                    close(read_file);
+                    pthread_mutex_unlock(&file_mutex);
+                    free(read_buffer);
+                    close(client_socket);
+                    cleanup_all();
+                }
+            } 
+            close(read_file);
+            pthread_mutex_unlock(&file_mutex);
+            free(read_buffer);
             break;
         }
     }
-
-    if (bytes_received <= 0) {
-        syslog(LOG_ERR, "Error: Failed to Read from Client.");
-        close(client_socket);
-        return NULL;
-    }
-
-    // Synchronize access to the file using the mutex
-    pthread_mutex_lock(&file_mutex);
-
-    // Write received message to the file
-    int write_file = open(DATA_FILE, O_CREAT | O_RDWR | O_APPEND);
-    if (write_file < 0) {
-        printf("Failed to open file for writing data.");
-        syslog(LOG_ERR, "Error: Failed to open file for writing client data.");
-        pthread_mutex_unlock(&file_mutex);
-        close(client_socket);
-        return NULL;
-    }
-
-    printf("Writing bytes = %c", total_received);
-    write(write_file, buffer, total_received);
-    close(write_file);
-
-    // Send the contents of the file back to the client
-    // file = fopen(DATA_FILE, "r");
-    int read_file = open(DATA_FILE, O_RDONLY);
-    if (read_file < 0) {
-        syslog(LOG_ERR, "Error: Failed to open file for reading file content.");
-        pthread_mutex_unlock(&file_mutex);
-        close(client_socket);
-        return NULL;
-    }
-
-    // Send the contents of the file to the client
-    while ((bytes_received = read(read_file, buffer, sizeof(buffer))) > 0) {
-        printf("Byte to send back = %c", bytes_received);
-        int send_success = send(client_socket, buffer, bytes_received, 0);
-        if (send_success == -1) {
-            syslog(LOG_ERR, "Error: Failed to Write while sending data to client.");
-            close(read_file);
-            pthread_mutex_unlock(&file_mutex);
-            close(client_socket);
-            return NULL;
-        }
-        // if (write(client_socket, buffer, bytes_received) == -1) {
-        //     syslog(LOG_ERR, "Error: Failed to Write while sending data to client.");
-        //     fclose(file);
-        //     pthread_mutex_unlock(&file_mutex);
-        //     close(client_socket);
-        //     return NULL;
-        // }
-    }
-
-    close(read_file);
-    pthread_mutex_unlock(&file_mutex);
     close(client_socket);
-    return NULL;
+    free(buffer);
+    remove_thread(pthread_self());
+    pthread_exit(NULL);
+    return 0;
 }
