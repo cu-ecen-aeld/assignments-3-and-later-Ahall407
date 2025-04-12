@@ -59,15 +59,17 @@ int main(int argc, char *argv[]) {
     }
 
     // Set up signal handlers using sigaction for better control
-    struct sigaction sa;
-    sa.sa_handler = signal_handler;
-    sa.sa_flags = 0;
-    sigemptyset(&sa.sa_mask);
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+    // struct sigaction sa;
+    // sa.sa_handler = signal_handler;
+    // sa.sa_flags = 0;
+    // sigemptyset(&sa.sa_mask);
 
-    if (sigaction(SIGINT, &sa, NULL) == -1 || sigaction(SIGTERM, &sa, NULL) == -1) {
-        syslog(LOG_ERR, "Error setting up signal handlers");
-        exit(EXIT_FAILURE);
-    }
+    // if (sigaction(SIGINT, &sa, NULL) == -1 || sigaction(SIGTERM, &sa, NULL) == -1) {
+    //     syslog(LOG_ERR, "Error setting up signal handlers");
+    //     exit(EXIT_FAILURE);
+    // }
 
     // Open syslog
     openlog("aesd_socket", LOG_PID | LOG_CONS, LOG_DAEMON);
@@ -139,9 +141,9 @@ int main(int argc, char *argv[]) {
     }
 
     // The server will clean up after the signal handler sets run = 0
-    join_threads();
-    cleanup_all();
-    printf("Closed aesd socket on port %d \n", PORT);
+    // join_threads();
+    // cleanup_all();
+    // printf("Closed aesd socket on port %d \n", PORT);
     return 0;
 }
 
@@ -150,13 +152,36 @@ int main(int argc, char *argv[]) {
 void signal_handler(int sig) {
     if (sig == SIGINT || sig == SIGTERM) {
         syslog(LOG_INFO, "Server interrupted by signal %d. Closing server...", sig);
-        printf("Caught signal and exiting.");
+        printf("Caught signal and exiting.\n");
+        if (shutdown(server_socket, SHUT_RDWR) == -1) {
+            syslog(LOG_ERR, "Error shutting down server socket");
+        }
+    
+        if (close(server_socket) == -1) {
+            syslog(LOG_ERR, "Error closing server socket");
+        }
+        printf("Closed aesd socket on port %d \n", PORT);
+    
+        thread_node_t* current = thread_list;
+        while (current != NULL) {
+            pthread_join(current->thread_id, NULL);
+            thread_node_t* temp = current;
+            current = current->next;
+            free(temp);
+        }
+        thread_list = NULL; // Reset the head of the list after joining all threads
+        pthread_mutex_destroy(&file_mutex);
+        remove(DATA_FILE);
+        printf("Just removed the file.\n");
+        closelog();
         run = 0;
+        exit(0);
     }
 }
 
 void cleanup_all(){
     syslog(LOG_INFO, "Cleaning up server socket, closing file and exiting.");
+    printf("In the cleanup all function.\n");
     // Close server socket
     if (shutdown(server_socket, SHUT_RDWR) == -1) {
         syslog(LOG_ERR, "Error shutting down server socket");
@@ -168,7 +193,9 @@ void cleanup_all(){
 
     printf("Closed aesd socket on port %d \n", PORT);
 
-    unlink(DATA_FILE);
+    // unlink(DATA_FILE);
+    remove(DATA_FILE);
+    printf("Just removed the file.\n");
     pthread_mutex_destroy(&file_mutex);
     closelog();
     exit(EXIT_SUCCESS);
@@ -226,6 +253,7 @@ void add_thread(pthread_t thread_id) {
 
 void join_threads() {
     // Join all active threads in the linked list
+    printf("In joining threads function.\n");
     thread_node_t* current = thread_list;
     while (current != NULL) {
         pthread_join(current->thread_id, NULL);
