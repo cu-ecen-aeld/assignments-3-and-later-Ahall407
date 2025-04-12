@@ -61,15 +61,6 @@ int main(int argc, char *argv[]) {
     // Set up signal handlers using sigaction for better control
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
-    // struct sigaction sa;
-    // sa.sa_handler = signal_handler;
-    // sa.sa_flags = 0;
-    // sigemptyset(&sa.sa_mask);
-
-    // if (sigaction(SIGINT, &sa, NULL) == -1 || sigaction(SIGTERM, &sa, NULL) == -1) {
-    //     syslog(LOG_ERR, "Error setting up signal handlers");
-    //     exit(EXIT_FAILURE);
-    // }
 
     // Open syslog
     openlog("aesd_socket", LOG_PID | LOG_CONS, LOG_DAEMON);
@@ -141,9 +132,9 @@ int main(int argc, char *argv[]) {
     }
 
     // The server will clean up after the signal handler sets run = 0
-    // join_threads();
-    // cleanup_all();
-    // printf("Closed aesd socket on port %d \n", PORT);
+    join_threads();
+    cleanup_all();
+    printf("Finished main function and exited completely\n");
     return 0;
 }
 
@@ -153,27 +144,6 @@ void signal_handler(int sig) {
     if (sig == SIGINT || sig == SIGTERM) {
         syslog(LOG_INFO, "Server interrupted by signal %d. Closing server...", sig);
         printf("Caught signal and exiting.\n");
-        if (shutdown(server_socket, SHUT_RDWR) == -1) {
-            syslog(LOG_ERR, "Error shutting down server socket");
-        }
-    
-        if (close(server_socket) == -1) {
-            syslog(LOG_ERR, "Error closing server socket");
-        }
-        printf("Closed aesd socket on port %d \n", PORT);
-    
-        thread_node_t* current = thread_list;
-        while (current != NULL) {
-            pthread_join(current->thread_id, NULL);
-            thread_node_t* temp = current;
-            current = current->next;
-            free(temp);
-        }
-        thread_list = NULL; // Reset the head of the list after joining all threads
-        pthread_mutex_destroy(&file_mutex);
-        remove(DATA_FILE);
-        printf("Just removed the file.\n");
-        closelog();
         run = 0;
         exit(0);
     }
@@ -193,10 +163,17 @@ void cleanup_all(){
 
     printf("Closed aesd socket on port %d \n", PORT);
 
-    // unlink(DATA_FILE);
-    remove(DATA_FILE);
-    printf("Just removed the file.\n");
-    pthread_mutex_destroy(&file_mutex);
+    if (pthread_mutex_destroy(&file_mutex) != 0) {
+        printf("Failed to destroy mutex.\n");
+    }
+    
+    if (remove(DATA_FILE) != 0) {
+        printf("Failed to remove the file.\n");
+    }
+    else {
+        printf("Just removed the file.\n");
+    }
+    
     closelog();
     exit(EXIT_SUCCESS);
 }
@@ -327,17 +304,24 @@ void* append_timestamp(void* arg) {
 // Function to handle each client in a separate thread
 void* handle_client_IO(void* arg) {
     int client_socket = *((int*)arg);
-    // char buffer[BUFFER_SIZE];
+    char *buffer = (char *)malloc(BUFFER_SIZE * sizeof(char));
+    size_t buffer_size = BUFFER_SIZE;
     int bytes_received;
     int total_received = 0;
 
     free(arg);  // Free the allocated memory for client_socket
 
-    char *buffer = (char *)malloc(BUFFER_SIZE * sizeof(char));
-    size_t buffer_size = BUFFER_SIZE;
-
     // Synchronize access to the file using the mutex
     pthread_mutex_lock(&file_mutex);
+    int write_file = open(DATA_FILE, O_CREAT | O_RDWR | O_APPEND, S_IRUSR | S_IWUSR);
+    if (write_file < 0) {
+        printf("Failed to open file for writing data.\n");
+        syslog(LOG_ERR, "Error: Failed to open file for writing client data.");
+        pthread_mutex_unlock(&file_mutex);
+        free(buffer);
+        close(client_socket);
+        cleanup_all();
+    }
     while ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
         if (bytes_received <= 0) {
             printf("Failed to read data from the client.");
@@ -356,23 +340,11 @@ void* handle_client_IO(void* arg) {
 
         printf("Just recieved a new byte = %s \n", buffer);
         // Write received message to the file
-        int write_file = open(DATA_FILE, O_CREAT | O_RDWR | O_APPEND, S_IRUSR | S_IWUSR);
-        if (write_file < 0) {
-            printf("Failed to open file for writing data.\n");
-            syslog(LOG_ERR, "Error: Failed to open file for writing client data.");
-            pthread_mutex_unlock(&file_mutex);
-            free(buffer);
-            close(client_socket);
-            cleanup_all();
-        }
-
-        printf("Writing bytes = %s \n", buffer);
         write(write_file, buffer, total_received);
-        close(write_file);
         printf("Just wrote bytes to %s \n", DATA_FILE);
 
         if (memchr(buffer, '\n', bytes_received) != NULL) {
-
+            close(write_file);
             // Send the contents of the file back to the client
             int read_file = open(DATA_FILE, O_RDONLY, S_IRUSR);
             if (read_file < 0) {
