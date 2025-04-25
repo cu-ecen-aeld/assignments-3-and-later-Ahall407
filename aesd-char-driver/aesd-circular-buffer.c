@@ -15,6 +15,7 @@
 #endif
 
 #include <stdio.h>
+#include <stdlib.h>
 #include "aesd-circular-buffer.h"
 
 /**
@@ -66,23 +67,48 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 * Any necessary locking must be handled by the caller
 * Any memory referenced in @param add_entry must be allocated by and/or must have a lifetime managed by the caller.
 */
-void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
+const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
+    /**
+     * Adds an entry to the circular buffer.
+     * If an old entry is overwritten, returns the buffptr of that entry
+     * so the caller can free associated memory if needed.
+     * 
+     * @return pointer to overwritten entry's buffptr, or NULL if none.
+     */
+    const char *old_buffptr = NULL;
+
+    // If buffer is full, store the old pointer to free it later
+    if (buffer->full) {
+        old_buffptr = buffer->entry[buffer->out_offs].buffptr;
+    }
+
+    // Allocate memory for new string
+    char *new_buff = malloc(add_entry->size);
+    if (!new_buff) {
+        // Allocation failed
+        return NULL;
+    }
+    memcpy(new_buff, add_entry->buffptr, add_entry->size);
+
+    // Replace entry at in_offs
+    buffer->entry[buffer->in_offs].buffptr = new_buff;
+    buffer->entry[buffer->in_offs].size = add_entry->size;
 
     buffer->entry[buffer->in_offs] = *add_entry;
 
+    // Advance in_offs
+    buffer->in_offs = (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+
     if (buffer->full) {
+        // Also move out_offs to next (drop oldest entry)
         buffer->out_offs = (buffer->out_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     }
 
-    buffer->in_offs = (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    // If after the move, in == out, buffer is full
+    buffer->full = (buffer->in_offs == buffer->out_offs);
 
-    if (buffer->in_offs == buffer->out_offs) {
-        buffer->full = true;
-    }
-    else {
-        buffer->full = false;
-    }
+    return old_buffptr;
 
 }
 
