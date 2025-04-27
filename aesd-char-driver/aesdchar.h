@@ -26,9 +26,14 @@
 struct aesd_dev
 {
     /**
-     * TODO: Add structure(s) and locks needed to complete assignment requirements
+     * DONE: Add structure(s) and locks needed to complete assignment requirements
      */
-    struct cdev cdev;     /* Char device structure      */
+    struct cdev cdev;                             // Char device structure
+    struct aesd_circular_buffer circular_buffer;  // circular buffer for aesd-circular-buffer
+    struct mutex lock;                            // lock for concurrrent access
+
+    char *write_accumulator;                      // buffer for partial writes
+    size_t accumulator_size;                      // Size of accumuatated data
 };
 
 

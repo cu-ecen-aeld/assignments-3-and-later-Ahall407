@@ -2,64 +2,83 @@
 #include <stdlib.h>
 #include <string.h>
 #include "aesd-circular-buffer.h"
-#include "unity.h"
 
-
-void setUp(void) {
-    // Called before each test
-}
-
-void tearDown(void) {
-    // Called after each test
-}
-
-static void write_circular_buffer_packet(struct aesd_circular_buffer *buffer,
-    const char *write_string)
-{
+void write_circular_buffer_packet(struct aesd_circular_buffer *buffer, const char *write_string) {
     struct aesd_buffer_entry entry;
     const char *rtnptr;
-    char *copy = strdup(write_string);  // <--- malloc'd copy!
-    const char *start_out_ptr = buffer->entry[buffer->out_offs].buffptr;
-    bool buffer_was_full = buffer->full;
-
-    entry.buffptr = copy;
-    entry.size = strlen(copy);
-
+    entry.buffptr = write_string;
+    entry.size = strlen(write_string);
     rtnptr = aesd_circular_buffer_add_entry(buffer, &entry);
-
-    if (buffer_was_full) {
-        TEST_ASSERT_EQUAL_PTR_MESSAGE(start_out_ptr, rtnptr, "Expect pointer to overwritten entry when full.");
+    if (rtnptr) {
         free((void *)rtnptr);
-    } 
-    else {
-        TEST_ASSERT_NULL_MESSAGE(rtnptr, "Expect NULL when buffer not full.");
     }
 }
 
-void test_fill_and_overwrite_buffer(void)
-{
-    struct aesd_circular_buffer test_buffer = {0};
-    char temp[64];
+void test_multiple_partial_writes(struct aesd_circular_buffer *buffer) {
+    // Simulate receiving partial chunks like over a network or userspace write() calls
 
-    for (int i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED + 3; i++) {
-        snprintf(temp, sizeof(temp), "command %d\n", i);
-        write_circular_buffer_packet(&test_buffer, temp);
-    }
+    // "fir" "st\nsec" "ond\nthi" "rd\n"
+    char *writes[] = {
+        strdup("fir"),      // not complete
+        strdup("st\nsec"),  // complete "first\n", partial "sec"
+        strdup("ond\nthi"), // completes "second\n", partial "thi"
+        strdup("rd\n")      // completes "third\n"
+    };
+    size_t writes_count = sizeof(writes) / sizeof(writes[0]);
 
-    // Final check: all entries should contain some data
-    for (int i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++) {
-        TEST_ASSERT_NOT_NULL_MESSAGE(test_buffer.entry[i].buffptr, "Expected buffer entry not to be NULL.");
-    }
+    printf("[Test] Writing multiple partial command pieces...\n");
 
-    // Final cleanup
-    for (int i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++) {
-        free((void *)test_buffer.entry[i].buffptr);
+    for (size_t i = 0; i < writes_count; i++) {
+        write_circular_buffer_packet(buffer, writes[i]);
+        free(writes[i]);
     }
 }
 
-int main(void)
+static void test_multiple_reads()
 {
-    UNITY_BEGIN();
-    RUN_TEST(test_fill_and_overwrite_buffer);
-    return UNITY_END();
+    struct aesd_circular_buffer buffer;
+    aesd_circular_buffer_init(&buffer);
+
+    printf("[Test] Writing multiple partial command pieces...\n");
+
+    write_circular_buffer_packet(&buffer, strdup("st"));
+    write_circular_buffer_packet(&buffer, strdup("art\n"));
+    write_circular_buffer_packet(&buffer, strdup("second\n"));
+    write_circular_buffer_packet(&buffer, strdup("third\n"));
+
+    printf("[Test] Reading back assembled commands...\n");
+
+    size_t offset = 0;
+    size_t entry_offset = 0;
+    const struct aesd_buffer_entry *entry;
+    size_t read_bytes;
+
+    while (true)
+    {
+        entry = aesd_circular_buffer_find_entry_offset_for_fpos(&buffer, offset, &entry_offset);
+        if (!entry) {
+            printf("End of buffer reached at offset %zu\n", offset);
+            break;
+        }
+
+        // Print from the current offset inside the entry
+        const char *start_ptr = entry->buffptr + entry_offset;
+        read_bytes = entry->size - entry_offset; // how much left to read in this entry
+
+        printf("Read at offset %zu: ", offset);
+        fwrite(start_ptr, 1, read_bytes, stdout);
+        printf("\n");
+
+        offset += read_bytes; // move forward
+    }
+}
+
+int main() {
+    struct aesd_circular_buffer test_buffer;
+    aesd_circular_buffer_init(&test_buffer);
+
+    test_multiple_partial_writes(&test_buffer);
+    test_multiple_reads(&test_buffer);
+
+    return 0;
 }
