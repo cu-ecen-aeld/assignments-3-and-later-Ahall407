@@ -91,7 +91,7 @@ const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, 
     if (!new_buff) {
         // Allocation failed
         printk(KERN_ERR "kmalloc failed in aesd-circular-buffer\n");
-        return -ENOMEM;
+        return NULL;
     }
     memcpy(new_buff, add_entry->buffptr, add_entry->size);
 
