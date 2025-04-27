@@ -18,11 +18,20 @@
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include "aesdchar.h"
+#include "aesd-circular-buffer.h"
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
 MODULE_AUTHOR("Alex Hall"); /** TODO: fill in your name **/
 MODULE_LICENSE("Dual BSD/GPL");
+
+// function declarations
+int aesd_open(struct inode *inode, struct file *filp);
+int aesd_release(struct inode *inode, struct file *filp);
+ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos);
+ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos);
+int aesd_init_module(void);
+void aesd_cleanup_module(void);
 
 struct aesd_dev aesd_device;
 
@@ -201,7 +210,7 @@ int aesd_init_module(void)
     /**
      *  Initialize the AESD specific portion of the device
      */
-    aesd_circular_buffer_init(&aesd_device.buffer);
+    aesd_circular_buffer_init(&aesd_device.circular_buffer);
     mutex_init(&aesd_device.lock);
 
     result = aesd_setup_cdev(&aesd_device);
@@ -226,7 +235,7 @@ void aesd_cleanup_module(void)
     struct aesd_buffer_entry *entry;
     uint8_t index;
 
-    AESD_CIRCULAR_BUFFER_FOREACH(entry, &aesd_device.buffer, index) {
+    AESD_CIRCULAR_BUFFER_FOREACH(entry, &aesd_device.circular_buffer, index) {
         if (entry->buffptr != NULL) {
             kfree(entry->buffptr);
             entry->buffptr = NULL;

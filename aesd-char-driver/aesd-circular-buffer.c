@@ -10,12 +10,15 @@
 
 #ifdef __KERNEL__
 #include <linux/string.h>
+#include <linux/slab.h>
+#include <linux/types.h>
 #else
 #include <string.h>
-#endif
-
 #include <stdio.h>
 #include <stdlib.h>
+#endif
+
+
 #include "aesd-circular-buffer.h"
 
 /**
@@ -84,10 +87,11 @@ const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, 
     }
 
     // Allocate memory for new string
-    char *new_buff = malloc(add_entry->size);
+    char *new_buff = kmalloc(add_entry->size, GFP_KERNEL);
     if (!new_buff) {
         // Allocation failed
-        return NULL;
+        printk(KERN_ERR "kmalloc failed in aesd-circular-buffer\n");
+        return -ENOMEM;
     }
     memcpy(new_buff, add_entry->buffptr, add_entry->size);
 
