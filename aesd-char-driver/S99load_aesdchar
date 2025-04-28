@@ -1,0 +1,27 @@
+#!/bin/sh
+
+case "$1" in
+  start)
+    echo "Loading aesdchar module"
+    insmod /lib/modules/aesdchar.ko
+    major=$(awk "\$2==\"aesdchar\" {print \$1}" /proc/devices)
+    if [ -n "$major" ]; then
+      mknod /dev/aesdchar c $major 0
+      chmod 666 /dev/aesdchar
+    else
+      echo "Failed to find major number for aesdchar"
+      exit 1
+    fi
+    ;;
+  stop)
+    echo "Unloading aesdchar module"
+    rmmod aesdchar
+    rm -f /dev/aesdchar
+    ;;
+  *)
+    echo "Usage: $0 {start|stop}"
+    exit 1
+    ;;
+esac
+
+exit 0
