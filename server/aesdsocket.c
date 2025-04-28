@@ -118,7 +118,6 @@ int main(int argc, char *argv[]) {
 
     while (run) {
         int client_socket = accept(server_socket, NULL, NULL);
-        printf("Just accepted client connection.\n");
         if (client_socket < 0) {
             syslog(LOG_ERR, "Error accepting connection");
             cleanup(server_socket);
@@ -242,68 +241,6 @@ void create_daemon() {
     close(STDERR_FILENO);
 }
 
-// void handle_client(int client_socket, int server_socket) {
-//     struct sockaddr_in client_addr;
-//     socklen_t client_addr_len = sizeof(client_addr);
-
-//     if (getpeername(client_socket, (struct sockaddr *)&client_addr, &client_addr_len) == 0) {
-//         char client_ip[INET_ADDRSTRLEN];
-//         inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, INET_ADDRSTRLEN);
-//         syslog(LOG_INFO, "Accepted connection from %s", client_ip);
-//     }
-
-//     char buffer[BUFFER_SIZE];
-//     ssize_t bytes_received;
-
-//     pthread_mutex_lock(&file_mutex);
-
-//     while ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
-//         int data_fd;
-//         #ifdef USE_AESD_CHAR_DEVICE
-//             data_fd = open("/dev/aesdchar", O_RDWR);
-//         #else
-//             data_fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
-//         #endif
-//         if (data_fd < 0) {
-//             syslog(LOG_ERR, "Error opening data file");
-//             cleanup(server_socket);
-//         }
-
-//         write(data_fd, buffer, bytes_received);
-//         #ifdef USE_AESD_CHAR_DEVICE
-//             lseek(data_fd, 0, SEEK_SET);
-//         #endif
-//         close(data_fd);
-
-//         if (memchr(buffer, '\n', bytes_received) != NULL) {
-//             int file_fd;
-//             #ifdef USE_AESD_CHAR_DEVICE
-//                 file_fd = open("/dev/aesdchar", O_RDONLY);
-//             #else
-//                 file_fd = open(DATA_FILE, O_RDONLY);
-//             #endif
-//             if (file_fd < 0) {
-//                 syslog(LOG_ERR, "Error opening data file for reading");
-//                 cleanup(server_socket);
-//             }
-
-//             char file_buffer[1024];
-//             ssize_t bytes_read;
-
-//             while ((bytes_read = read(file_fd, file_buffer, sizeof(file_buffer))) > 0) {
-//                 send(client_socket, file_buffer, bytes_read, 0);
-//             }
-
-//             close(file_fd);
-//             pthread_mutex_unlock(&file_mutex);
-//             break;
-//         }
-//     }
-
-//     syslog(LOG_INFO, "Closed connection from %s", inet_ntoa(client_addr.sin_addr));
-//     close(client_socket);
-// }
-
 void handle_client(int client_socket, int server_socket) {
     struct sockaddr_in client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
@@ -311,7 +248,6 @@ void handle_client(int client_socket, int server_socket) {
     ssize_t bytes_received;
     int data_fd = -1;
 
-    printf("In handle_client\n");
     if (getpeername(client_socket, (struct sockaddr *)&client_addr, &client_addr_len) == 0) {
         char client_ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, INET_ADDRSTRLEN);
@@ -319,10 +255,8 @@ void handle_client(int client_socket, int server_socket) {
     }
 
     pthread_mutex_lock(&file_mutex);
-    printf("Just locked pthread.\n");
 
     #ifdef USE_AESD_CHAR_DEVICE
-        printf("Using /dev/aesdchar\n");
         data_fd = open("/dev/aesdchar", O_RDWR);
     #else
         data_fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
@@ -333,7 +267,6 @@ void handle_client(int client_socket, int server_socket) {
         pthread_mutex_unlock(&file_mutex);
         cleanup(server_socket);
     }
-    printf("No error opening file.\n");
 
     while ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
         if (write(data_fd, buffer, bytes_received) != bytes_received) {
@@ -342,19 +275,16 @@ void handle_client(int client_socket, int server_socket) {
             close(data_fd);
             cleanup(server_socket);
         }
-        printf("Just wrote bytes.\n");
 
         if (memchr(buffer, '\n', bytes_received)) {
             #ifdef USE_AESD_CHAR_DEVICE
                 lseek(data_fd, 0, SEEK_SET);
             #endif
-            printf("found a newline character\n");
             char read_buf[BUFFER_SIZE];
             ssize_t bytes_read;
             while ((bytes_read = read(data_fd, read_buf, sizeof(read_buf))) > 0) {
                 send(client_socket, read_buf, bytes_read, 0);
             }
-            printf("Finished sending data back\n");
             break;
         }
     }
