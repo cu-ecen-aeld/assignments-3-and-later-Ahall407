@@ -19,6 +19,8 @@
 #include <linux/fs.h> // file_operations
 #include "aesdchar.h"
 #include "aesd-circular-buffer.h"
+#include "aesd_ioctl.h"
+
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -30,6 +32,8 @@ int aesd_open(struct inode *inode, struct file *filp);
 int aesd_release(struct inode *inode, struct file *filp);
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos);
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos);
+loff_t aesd_llseek(struct file *filp, loff_t offset, int whence);
+long aesd_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
 int aesd_init_module(void);
 void aesd_cleanup_module(void);
 
@@ -166,14 +170,91 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     mutex_unlock(&dev->lock); // unlock shared device
     kfree(kbuff); // free temp kernel buffer
     retval = count; // return number of bytes successfully written
+    *f_pos += retval; // advance file position by number of bytes written
 
     return retval;
 }
+
+loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
+{
+    struct aesd_dev *dev = filp->private_data;
+    loff_t new_pos;
+
+    if (mutex_lock_interruptible(&dev->lock))
+        return -ERESTARTSYS;
+
+    // Calculate total size of valid buffer content
+    size_t total_size = aesd_circular_buffer_size(&dev->circular_buffer);
+
+    // Use vfs_llseek to compute new position
+    new_pos = vfs_llseek(filp, offset, whence);
+
+    // Clamp new position to valid range [0, total_size]
+    if (new_pos < 0)
+        new_pos = 0;
+    else if (new_pos > total_size)
+        new_pos = total_size;
+
+    filp->f_pos = new_pos;  // Update file position
+
+    mutex_unlock(&dev->lock);
+
+    return new_pos;
+}
+
+long aesd_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+    struct aesd_seekto seekto;
+    struct aesd_dev *dev = filp->private_data;
+    ssize_t offset = 0;
+    uint8_t index;
+
+    // Check that the cmd corresponds to the correct ioctl command number
+    if (cmd != AESDCHAR_IOCSEEKTO)
+        return -ENOTTY;
+
+    // Copy the aesd_seekto struct with write_cmd and write_cmd_offset from user space
+    if (copy_from_user(&seekto, (const void __user *)arg, sizeof(seekto)))
+        return -EFAULT;
+
+    if (mutex_lock_interruptible(&dev->lock))
+        return -ERESTARTSYS;
+
+    // Validate index and offset
+    // Ensure write_cmd within bounds of buffer size
+    // Ensure the target buffer exists
+    // Ensure write_cmd_offset is not beyond the commands size
+    if (seekto.write_cmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED ||
+        dev->circular_buffer.entry[seekto.write_cmd].buffptr == NULL ||
+        seekto.write_cmd_offset > dev->circular_buffer.entry[seekto.write_cmd].size)
+    {
+        mutex_unlock(&dev->lock);
+        return -EINVAL;
+    }
+
+    // Compute the byte offset from start of buffer
+    // Add up sizes of all prior commands
+    for (index = 0; index < seekto.write_cmd; index++) {
+        offset += dev->circular_buffer.entry[index].size;
+    }
+    // Add offset to get absolute position
+    offset += seekto.write_cmd_offset;
+
+    // Update f_pos so read/writes correctly aligned
+    filp->f_pos = offset;
+
+    mutex_unlock(&dev->lock);
+    return 0;
+}
+
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
     .write =    aesd_write,
     .open =     aesd_open,
+    .llseek =   aesd_llseek,
+    .unlocked_ioctl = aesd_unlocked_ioctl,
     .release =  aesd_release,
 };
 
@@ -190,7 +271,6 @@ static int aesd_setup_cdev(struct aesd_dev *dev)
     }
     return err;
 }
-
 
 
 int aesd_init_module(void)

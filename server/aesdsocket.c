@@ -6,12 +6,15 @@
 #include <signal.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netdb.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <pthread.h>
+#include <sys/ioctl.h>
+#include "aesd_ioctl.h"
 
 
 #define PORT 9000
@@ -23,6 +26,9 @@
 #ifndef USE_AESD_CHAR_DEVICE
 #define USE_AESD_CHAR_DEVICE (1)
 #endif
+
+#define IOCTL_PREFIX "AESDCHAR_IOCSEEKTO:"
+#define IOCTL_PREFIX_LEN (sizeof(IOCTL_PREFIX) - 1)
 
 volatile sig_atomic_t run = 1;
 
@@ -262,18 +268,38 @@ void handle_client(int client_socket, int server_socket) {
         data_fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
     #endif
     if (data_fd < 0) {
-        printf("Error opening file.\n");
         syslog(LOG_ERR, "Error opening data file");
         pthread_mutex_unlock(&file_mutex);
         cleanup(server_socket);
+        return;
     }
 
     while ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
+
+        #ifdef USE_AESD_CHAR_DEVICE
+            // Check and process IOCTL command
+            if (strncmp(buffer, IOCTL_PREFIX, IOCTL_PREFIX_LEN) == 0) {
+                unsigned int write_cmd, write_cmd_offset;
+                if (sscanf(buffer + IOCTL_PREFIX_LEN, "%u,%u", &write_cmd, &write_cmd_offset) == 2) {
+                    struct aesd_seekto seekto = { .write_cmd = write_cmd, .write_cmd_offset = write_cmd_offset };
+                    if (ioctl(data_fd, AESDCHAR_IOCSEEKTO, &seekto) == -1) {
+                        syslog(LOG_ERR, "IOCTL failed: %s", strerror(errno));
+                    }
+                    continue;  // Don't write this string to the device
+                } 
+                else {
+                    syslog(LOG_ERR, "Malformed IOCTL command received");
+                    continue;
+                }
+            }
+        #endif
+
         if (write(data_fd, buffer, bytes_received) != bytes_received) {
             syslog(LOG_ERR, "Error writing to data file");
-            pthread_mutex_unlock(&file_mutex);
             close(data_fd);
+            pthread_mutex_unlock(&file_mutex);
             cleanup(server_socket);
+            return;
         }
 
         if (memchr(buffer, '\n', bytes_received)) {
