@@ -19,7 +19,7 @@
 #include <stdlib.h>
 #endif
 
-
+#include "aesdchar.h"
 #include "aesd-circular-buffer.h"
 
 /**
@@ -52,6 +52,9 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 
     for (uint8_t i =0; i < count; i++){
         struct aesd_buffer_entry *entry = &buffer->entry[index];
+        PDEBUG("Checking entry %d: size=%zu, cumulative_offset=%zu, char_offset=%zu\n", 
+            index, entry->size, cumulative_offset, char_offset);
+        
         if (char_offset < cumulative_offset + entry->size) {
             *entry_offset_byte_rtn = char_offset - cumulative_offset;
             return entry;

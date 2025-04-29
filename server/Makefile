@@ -1,6 +1,7 @@
 CC ?= $(CROSS_COMPILE)gcc
 
 CFLAGS ?= -g -Wall -Werror
+CFLAGS += -I../aesd-char-driver
 LDFLAGS ?= -pthread -lrt
 
 # Allow setting USE_AESD_CHAR_DEVICE from the command line, default to 1

@@ -277,20 +277,28 @@ void handle_client(int client_socket, int server_socket) {
     while ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
 
         #ifdef USE_AESD_CHAR_DEVICE
-            // Check and process IOCTL command
             if (strncmp(buffer, IOCTL_PREFIX, IOCTL_PREFIX_LEN) == 0) {
                 unsigned int write_cmd, write_cmd_offset;
                 if (sscanf(buffer + IOCTL_PREFIX_LEN, "%u,%u", &write_cmd, &write_cmd_offset) == 2) {
                     struct aesd_seekto seekto = { .write_cmd = write_cmd, .write_cmd_offset = write_cmd_offset };
+
                     if (ioctl(data_fd, AESDCHAR_IOCSEEKTO, &seekto) == -1) {
                         syslog(LOG_ERR, "IOCTL failed: %s", strerror(errno));
                     }
-                    continue;  // Don't write this string to the device
+
+                    lseek(data_fd, 0, SEEK_CUR); // Synchronize file offset
+
+                    // Now read from the new position and send to client
+                    char read_buf[BUFFER_SIZE];
+                    ssize_t bytes_read;
+                    while ((bytes_read = read(data_fd, read_buf, sizeof(read_buf))) > 0) {
+                        send(client_socket, read_buf, bytes_read, 0);
+                    }
                 } 
                 else {
                     syslog(LOG_ERR, "Malformed IOCTL command received");
-                    continue;
                 }
+                continue; // Don't write this command to the device
             }
         #endif
 

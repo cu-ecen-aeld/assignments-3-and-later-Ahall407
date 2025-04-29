@@ -68,6 +68,8 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     struct aesd_buffer_entry *entry;
     size_t entry_offset;
     size_t bytes_to_copy;
+    size_t total_size;
+    size_t copied = 0;
 
     PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
     
@@ -75,27 +77,33 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         return -ERESTARTSYS;
     }
 
-    entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->circular_buffer, *f_pos, &entry_offset);
-
-    if (!entry) {
-        retval = 0;
-        goto out;
+    total_size = aesd_circular_buffer_size(&dev->circular_buffer);
+    if (*f_pos >= total_size) {
+        mutex_unlock(&dev->lock);
+        return 0; // EOF
     }
 
-    // Determine how much data to copy to userspace
-    bytes_to_copy = entry->size - entry_offset;
-    if (bytes_to_copy > count) {
-        // Limit size to user's buffer
-        bytes_to_copy = count;
+    while (copied < count) {
+        entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->circular_buffer, *f_pos, &entry_offset);
+        if (!entry) {
+            break; // No more data
+        }
+
+        bytes_to_copy = entry->size - entry_offset;
+        if (bytes_to_copy > (count - copied)) {
+            bytes_to_copy = count - copied;
+        }
+
+        if (copy_to_user(buf + copied, entry->buffptr + entry_offset, bytes_to_copy)) {
+            retval = -EFAULT;
+            goto out;
+        }
+
+        copied += bytes_to_copy;
+        *f_pos += bytes_to_copy;
     }
 
-    if (copy_to_user(buf, entry->buffptr + entry_offset, bytes_to_copy)) {
-        retval = -EFAULT; //Failed to copy to userspace
-        goto out;
-    }
-
-    *f_pos += bytes_to_copy; // Advance file position by number of bytes read
-    retval = bytes_to_copy;
+    retval = copied;
 
 out:
     mutex_unlock(&dev->lock);
@@ -149,6 +157,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     // Check if the write_accumulator contains newline char \n
     newline_ptr = memchr(dev->write_accumulator, '\n', dev->accumulator_size);
     if (newline_ptr != NULL) {
+        printk(KERN_DEBUG "Newline found, writing entry of size %zu\n", dev->accumulator_size);
         // Successfully recieved the full command and store to circular bufer
         struct aesd_buffer_entry new_entry;
         const char *old_buffptr;
@@ -179,15 +188,28 @@ loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
 {
     struct aesd_dev *dev = filp->private_data;
     loff_t new_pos;
+    size_t total_size;
 
     if (mutex_lock_interruptible(&dev->lock))
         return -ERESTARTSYS;
 
     // Calculate total size of valid buffer content
-    size_t total_size = aesd_circular_buffer_size(&dev->circular_buffer);
+    total_size = aesd_circular_buffer_size(&dev->circular_buffer);
 
-    // Use vfs_llseek to compute new position
-    new_pos = vfs_llseek(filp, offset, whence);
+    switch (whence) {
+        case SEEK_SET:
+            new_pos = offset;
+            break;
+        case SEEK_CUR:
+            new_pos = filp->f_pos + offset;
+            break;
+        case SEEK_END:
+            new_pos = total_size + offset;
+            break;
+        default:
+            mutex_unlock(&dev->lock);
+            return -EINVAL;
+    }
 
     // Clamp new position to valid range [0, total_size]
     if (new_pos < 0)
@@ -234,13 +256,22 @@ long aesd_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
     // Compute the byte offset from start of buffer
     // Add up sizes of all prior commands
+    uint8_t circ_index = dev->circular_buffer.out_offs;
+
     for (index = 0; index < seekto.write_cmd; index++) {
-        offset += dev->circular_buffer.entry[index].size;
+        offset += dev->circular_buffer.entry[circ_index].size;
+        circ_index = (circ_index + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     }
     // Add offset to get absolute position
-    offset += seekto.write_cmd_offset;
+    // Ensure the command we seek to is valid
+    struct aesd_buffer_entry *target_entry = &dev->circular_buffer.entry[circ_index];
+    if (target_entry->buffptr == NULL || seekto.write_cmd_offset > target_entry->size) {
+        mutex_unlock(&dev->lock);
+        return -EINVAL;
+    }
 
     // Update f_pos so read/writes correctly aligned
+    offset += seekto.write_cmd_offset;
     filp->f_pos = offset;
 
     mutex_unlock(&dev->lock);
